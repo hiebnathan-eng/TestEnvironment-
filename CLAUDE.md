@@ -4,51 +4,90 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-`testenvironment` is a Rust CLI application. It prints a greeting for a name
-passed on the command line, falling back to a generic greeting when none is
-given. It's a small starter scaffold — the structure (library + thin binary +
-tests) is meant to be extended.
+`census-forecaster` is a hospital **census prediction** system. It learns from
+historical daily census logs and local demographic data, then forecasts future
+census (occupied beds) at **daily, monthly, and yearly** granularity, each with
+an uncertainty interval. It is designed for *continuous improvement*: users
+append new observations over time and re-run; the model retrains on all data on
+hand.
 
-- **Language:** Rust (edition 2024), built/tested against Rust 1.94.
-- **No third-party dependencies** yet — std only.
+- **Language:** Python (3.10+).
+- **Dependencies:** `numpy`, `pandas`, `matplotlib`. Tests use `pytest`.
+- **No network or services** — everything runs locally against CSV files.
 
 ## Setup
 
-Install the [Rust toolchain](https://rustup.rs/) (stable). No other setup or
-environment variables are required.
+```sh
+python3 -m pip install -e .            # package + runtime deps
+python3 -m pip install pytest          # for the test suite
+```
+
+If the package is not installed, run via `PYTHONPATH=src python3 -m census_forecaster …`.
 
 ## Common commands
 
-- **Build:** `cargo build` (debug) / `cargo build --release` (optimized)
-- **Run:** `cargo run -- <NAME>` (e.g. `cargo run -- Ada`); `cargo run` greets the world
-- **Test (all):** `cargo test` — runs unit tests and doctests
-- **Test (single):** `cargo test <substring>` (e.g. `cargo test greet`)
-- **Format:** `cargo fmt` (apply) / `cargo fmt --check` (verify, CI-friendly)
-- **Lint:** `cargo clippy`
+- **Run (installed):** `census-forecast <subcommand>` (e.g. `census-forecast info`)
+- **Run (in-tree):** `PYTHONPATH=src python3 -m census_forecaster <subcommand>`
+- **Generate sample data:** `census-forecast generate-sample --years 4`
+- **Forecast:** `census-forecast forecast --horizon-days 90 --granularity all`
+- **Accuracy backtest:** `census-forecast evaluate --holdout-days 30`
+- **Test (all):** `python3 -m pytest`
+- **Test (single):** `python3 -m pytest tests/test_forecast_evaluate.py -k seasonality`
 
 ## Architecture
 
-The crate ships both a library and a binary that share a name (`testenvironment`):
+Logic lives in the `census_forecaster` package under `src/` (src layout). The
+data flow is: **CSV data → features → model → daily forecast → aggregation**.
 
-- `src/lib.rs` — **core logic lives here.** Public functions are unit-tested in
-  an inline `#[cfg(test)] mod tests` block, and documented with doctests that
-  also run under `cargo test`. Add reusable code here, not in `main.rs`.
-- `src/main.rs` — a thin CLI wrapper: it parses arguments and delegates to the
-  library. Keep it minimal so the logic stays testable.
+- `config.py` — single source of truth for file paths, CSV **column names**, and
+  model hyperparameters (`Config`). Nothing else hard-codes a path or magic number.
+- `data.py` — load/validate/append/import. Append helpers de-duplicate by key
+  (date / year, keep-last) so re-importing overlapping data is safe. This module
+  is the "keep adding information" workflow.
+- `sample_data.py` — synthetic data generator. It deliberately embeds the
+  structure the model is meant to recover (demographic base level, winter-peaking
+  season, weekend dips, trend, holiday dips, noise).
+- `features.py` — builds the numeric design matrix: linear trend, day-of-week
+  one-hot (Sunday = reference), yearly Fourier seasonal terms, holiday flag, and
+  demographic covariates. `DemographicsModel` interpolates yearly demographics to
+  daily values and **extrapolates** future years.
+- `model.py` — `RidgeModel`: ridge regression with an **unpenalised intercept**
+  and internal feature standardisation; exposes `fit`/`predict` and a residual
+  std used for prediction intervals.
+- `forecast.py` — `train()` fits on all history; `forecast()` returns a daily
+  prediction frame; `aggregate()` rolls daily predictions up to month/year
+  (average census, patient-days, peak). Aggregating from one daily model keeps
+  the three granularities consistent.
+- `evaluate.py` — `backtest()` holds out the most recent N days, trains on the
+  rest, and reports MAE/RMSE/MAPE/bias.
+- `plot.py` — optional matplotlib chart (uses the headless `Agg` backend).
+- `cli.py` — argparse CLI; `main()` translates `ValueError`/`FileNotFoundError`
+  into clean messages instead of tracebacks.
 
-This split is deliberate — keeping logic in the library means it can be tested
-directly and reused, while `main.rs` only handles I/O and argument wiring.
+### Key design choices (the *why*)
+
+- **Daily model is the source of truth.** Monthly/yearly numbers are aggregates
+  of daily predictions, never separately fit — this guarantees consistency.
+- **Ridge regression**, not a heavyweight forecaster: stable on short history,
+  fast to retrain (the core of the add-data-and-rerun loop), and interpretable.
+  The `fit`/`predict` interface is the seam to swap in a richer model later.
+- **Aggregate intervals** approximate the effective sample size as the number of
+  weeks (not days) to stay honest about census autocorrelation
+  (`forecast._interval_for_mean`).
 
 ## Conventions
 
-- Keep business logic in `src/lib.rs`; `main.rs` should only do I/O/arg parsing.
-- Add unit tests alongside new library code in the `tests` module, and a
-  doctest example on public functions where it aids understanding.
-- Before committing, run `cargo fmt`, `cargo clippy`, and `cargo test`.
+- Keep CSV column names in `config.py`; reference them via the `C.*` constants,
+  never string literals scattered through the code.
+- Add tests under `tests/` alongside new behaviour. Fixtures in `conftest.py`
+  provide an isolated temp data dir (`cfg`) and a sample-populated one (`seeded_cfg`).
+- Sample/input CSVs in `data/` are tracked; generated forecasts
+  (`data/forecasts/`, PNGs) are git-ignored.
+- Run `python3 -m pytest` before committing.
 
 ## Working agreements
 
 - Keep this file accurate. When you change how the project is built, run, or
-  tested, update the relevant section here in the same change.
+  tested — or the CSV schemas — update the relevant section here in the same change.
 - Prefer documenting the *why* and the non-obvious over restating what is
   already clear from reading the code.

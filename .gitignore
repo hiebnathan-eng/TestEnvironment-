@@ -1,8 +1,21 @@
-# Build artifacts
-/target
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
 
-# Backtraces
-*.rs.bk
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Generated forecast outputs (the input CSVs in data/ ARE tracked)
+data/forecasts/
+*.png
 
 # Local environment overrides
 .env
