@@ -12,8 +12,11 @@ yearly** granularity, each with an uncertainty interval. It is designed for
 model retrains on all data on hand.
 
 - **Language:** Python (3.10+).
-- **Dependencies:** `numpy`, `pandas`, `matplotlib`. Tests use `pytest`.
-- **No network or services** — everything runs locally against CSV files.
+- **Dependencies:** `numpy`, `pandas`, `matplotlib` (stdlib `urllib` for fetching).
+  Tests use `pytest`.
+- **Local-first** — the core runs entirely against local CSV files. The only
+  network use is the optional `fetch-weather` / `fetch-flu` commands; everything
+  else (and the whole test suite) works offline.
 
 ## Setup
 
@@ -66,6 +69,12 @@ data flow is: **CSV data → features → model → daily forecast → aggregati
 - `patterns.py` — `analyze()` powers the `explain` command: observed day-of-week
   and month effects, census↔weather/flu correlations, and the model's top
   standardised coefficients.
+- `sources.py` — live data fetchers (`fetch-weather`, `fetch-flu`): Open-Meteo
+  for daily temperature (history + 16-day forecast) and Delphi/CDC ILINet for
+  weekly flu, expanded to daily. Uses stdlib `urllib` (honours `HTTPS_PROXY` and
+  system CA), with the network call (`_get_json`) isolated from the pure parsers
+  so parsing is unit-tested offline. Raises `FetchError` with an actionable
+  message when a host is blocked/unreachable. MMWR-week→date math lives here.
 - `plot.py` — optional matplotlib chart (uses the headless `Agg` backend).
 - `cli.py` — argparse CLI; `main()` translates `ValueError`/`FileNotFoundError`
   into clean messages instead of tracebacks.

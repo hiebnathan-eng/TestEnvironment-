@@ -143,6 +143,35 @@ def _import_daily_series(path: Path, value_col: str, src: str | Path) -> pd.Data
     return merged
 
 
+def _merge_daily_series_frame(
+    path: Path, value_col: str, incoming: pd.DataFrame
+) -> pd.DataFrame:
+    """Merge an in-memory (date, value) frame into a daily-series file by date."""
+    existing = _load_daily_series(path, value_col)
+    incoming = incoming[[C.WEATHER_DATE, value_col]].copy()
+    incoming[C.WEATHER_DATE] = pd.to_datetime(incoming[C.WEATHER_DATE]).dt.normalize()
+    merged = pd.concat([existing, incoming], ignore_index=True)
+    merged = (
+        merged.dropna()
+        .drop_duplicates(subset=[C.WEATHER_DATE], keep="last")
+        .sort_values(C.WEATHER_DATE)
+        .reset_index(drop=True)
+    )
+    _ensure_dir(path)
+    merged.to_csv(path, index=False)
+    return merged
+
+
+def merge_weather_frame(cfg: Config, df: pd.DataFrame) -> pd.DataFrame:
+    """Merge a fetched (date, temp_avg) frame into weather.csv."""
+    return _merge_daily_series_frame(cfg.weather_path, C.WEATHER_TEMP, df)
+
+
+def merge_flu_frame(cfg: Config, df: pd.DataFrame) -> pd.DataFrame:
+    """Merge a fetched (date, flu_index) frame into flu_activity.csv."""
+    return _merge_daily_series_frame(cfg.flu_path, C.FLU_INDEX, df)
+
+
 def load_weather(cfg: Config) -> pd.DataFrame:
     """Load optional daily weather (date, temp_avg)."""
     return _load_daily_series(cfg.weather_path, C.WEATHER_TEMP)

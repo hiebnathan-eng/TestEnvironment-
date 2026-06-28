@@ -125,8 +125,36 @@ census-forecast import-weather noaa_export.csv      # bulk-merge by date
 census-forecast import-flu     cdc_ilinet.csv
 ```
 
-> Flu data is often weekly (e.g. CDC ILINet). Either repeat the weekly value
-> across that week's dates, or ask and a weekly→daily importer can be added.
+> Flu data is often weekly (e.g. CDC ILINet). Use `import-flu --weekly` to expand
+> a weekly `date,flu_index` file to daily automatically:
+>
+> ```sh
+> census-forecast import-flu cdc_weekly.csv --weekly   # each row -> 7 daily rows
+> ```
+
+### Fetching live data automatically
+
+Instead of supplying files, you can pull weather and flu directly from free
+public sources (no API key needed):
+
+```sh
+# Weather: Open-Meteo (history for your census range + a 16-day forecast)
+census-forecast fetch-weather --lat 40.71 --lon -74.01
+
+# Flu: CDC ILINet via the Delphi Epidata API (national, last ~5 years)
+census-forecast fetch-flu --region nat
+```
+
+Both merge straight into your `weather.csv` / `flu_activity.csv`, so just re-run
+`forecast` afterwards.
+
+> **Network required.** These commands need outbound HTTPS to `open-meteo.com`
+> and `api.delphi.cmu.edu`. Some managed/sandboxed environments (including Claude
+> Code on the web under a restrictive network policy) block external hosts — you
+> will get a clear error pointing here:
+> https://code.claude.com/docs/en/claude-code-on-the-web . If so, run the fetch
+> on a machine with internet and copy the CSVs over, or relax the environment's
+> network policy. Manual `add-*` / `import-*` entry always works offline.
 
 ### Seeing what the model learned
 
@@ -166,6 +194,7 @@ python3 -m pytest          # run the test suite
   - `forecast.py` — daily prediction + monthly/yearly aggregation
   - `evaluate.py` — backtesting / accuracy metrics
   - `patterns.py` — the `explain` command: surfaces learned patterns
+  - `sources.py` — live weather (Open-Meteo) and flu (CDC/Delphi) fetchers
   - `plot.py` — optional charting
   - `cli.py` — command-line interface
 - `data/` — CSV inputs (sample data committed; generated forecasts are ignored)

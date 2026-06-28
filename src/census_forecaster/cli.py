@@ -120,8 +120,80 @@ def cmd_import_weather(args: argparse.Namespace) -> int:
 
 def cmd_import_flu(args: argparse.Namespace) -> int:
     cfg = _cfg(args)
-    df = data_mod.import_flu_csv(cfg, args.path)
-    print(f"Imported {args.path}. Flu data now has {len(df)} days.")
+    if args.weekly:
+        from . import sources
+
+        weekly = pd.read_csv(args.path, parse_dates=[data_mod.C.FLU_DATE])
+        if data_mod.C.FLU_INDEX not in weekly.columns:
+            print(f"Error: {args.path} must have 'date' and 'flu_index' columns")
+            return 1
+        daily = sources.weekly_to_daily(weekly)
+        df = data_mod.merge_flu_frame(cfg, daily)
+        print(f"Imported {args.path} (weekly -> daily). Flu data now has {len(df)} days.")
+    else:
+        df = data_mod.import_flu_csv(cfg, args.path)
+        print(f"Imported {args.path}. Flu data now has {len(df)} days.")
+    return 0
+
+
+def cmd_fetch_weather(args: argparse.Namespace) -> int:
+    import datetime
+
+    from . import sources
+
+    cfg = _cfg(args)
+    frames = []
+    try:
+        if not args.no_history:
+            census = data_mod.load_census(cfg)
+            if args.start:
+                start = args.start
+            elif len(census):
+                start = census[data_mod.C.CENSUS_DATE].min().date().isoformat()
+            else:
+                start = (datetime.date.today() - datetime.timedelta(days=365 * 4)).isoformat()
+            end = args.end or datetime.date.today().isoformat()
+            print(f"Fetching weather history {start} -> {end} ...")
+            frames.append(sources.fetch_weather_history(args.lat, args.lon, start, end))
+        if args.forecast_days > 0:
+            print(f"Fetching {args.forecast_days}-day weather forecast ...")
+            frames.append(sources.fetch_weather_forecast(args.lat, args.lon, args.forecast_days))
+    except sources.FetchError as exc:
+        print(f"Error: {exc}")
+        return 1
+
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if combined.empty:
+        print("Nothing fetched (try removing --no-history or setting --forecast-days).")
+        return 1
+    df = data_mod.merge_weather_frame(cfg, combined)
+    print(f"Saved -> {cfg.weather_path}. Weather now has {len(df)} days.")
+    return 0
+
+
+def cmd_fetch_flu(args: argparse.Namespace) -> int:
+    import datetime
+
+    from . import sources
+
+    cfg = _cfg(args)
+    end_year = args.end_year or datetime.date.today().year
+    start_year = args.start_year or (end_year - 5)
+    try:
+        print(f"Fetching flu activity for region '{args.region}', {start_year}-{end_year} ...")
+        daily = sources.fetch_flu(
+            regions=args.region,
+            start_epiweek=start_year * 100 + 1,
+            end_epiweek=end_year * 100 + 52,
+        )
+    except sources.FetchError as exc:
+        print(f"Error: {exc}")
+        return 1
+    if daily.empty:
+        print("No flu data returned for that region/range.")
+        return 1
+    df = data_mod.merge_flu_frame(cfg, daily)
+    print(f"Saved -> {cfg.flu_path}. Flu data now has {len(df)} days.")
     return 0
 
 
@@ -261,7 +333,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("import-flu", help="Bulk-import flu CSV (date,flu_index)")
     sp.add_argument("path")
+    sp.add_argument(
+        "--weekly",
+        action="store_true",
+        help="Treat each row's date as a week start and expand to 7 daily rows",
+    )
     sp.set_defaults(func=cmd_import_flu)
+
+    sp = sub.add_parser(
+        "fetch-weather", help="Download weather from Open-Meteo (needs internet)"
+    )
+    sp.add_argument("--lat", type=float, required=True, help="Latitude")
+    sp.add_argument("--lon", type=float, required=True, help="Longitude")
+    sp.add_argument("--start", default=None, help="History start YYYY-MM-DD (default: census start)")
+    sp.add_argument("--end", default=None, help="History end YYYY-MM-DD (default: today)")
+    sp.add_argument("--forecast-days", type=int, default=16, help="Days of forecast to add (0=none)")
+    sp.add_argument("--no-history", action="store_true", help="Skip history; fetch only the forecast")
+    sp.set_defaults(func=cmd_fetch_weather)
+
+    sp = sub.add_parser(
+        "fetch-flu", help="Download CDC ILINet flu activity via Delphi (needs internet)"
+    )
+    sp.add_argument("--region", default="nat", help="Delphi region code, e.g. 'nat' or 'hhs2'")
+    sp.add_argument("--start-year", type=int, default=None)
+    sp.add_argument("--end-year", type=int, default=None)
+    sp.set_defaults(func=cmd_fetch_flu)
 
     sp = sub.add_parser("explain", help="Report the patterns the model has learned")
     sp.set_defaults(func=cmd_explain)
