@@ -1,0 +1,8 @@
+# Build artifacts
+/target
+
+# Backtraces
+*.rs.bk
+
+# Local environment overrides
+.env
