@@ -61,10 +61,26 @@ def generate(
     pop_daily = np.interp(year_frac, yrs, pop_by_year)
     pct65_daily = np.interp(year_frac, yrs, pct65_by_year)
 
+    # --- Weather: seasonal temperature with per-year offsets and daily noise. -
+    temp_normal = 55.0 - 25.0 * np.cos(2.0 * np.pi * (doy - 15) / _DAYS_PER_YEAR)
+    year_lookup = {y: rng.normal(0.0, 3.0) for y in range(yr_lo, yr_hi + 1)}
+    temp_year_offset = np.array([year_lookup[int(y)] for y in dates.year])
+    temp = temp_normal + temp_year_offset + rng.normal(0.0, 4.0, size=len(dates))
+    temp_anomaly = temp - temp_normal  # colder-than-normal is positive cold load
+
+    # --- Flu: winter-peaking curve whose *severity* varies year to year. ------
+    flu_curve = (0.5 + 0.5 * np.cos(2.0 * np.pi * (doy - 30) / _DAYS_PER_YEAR)) ** 3
+    severities = {y: s for y, s in zip(range(yr_lo, yr_hi + 1), [0.7, 1.4, 1.0, 1.5, 0.85, 1.1, 0.9])}
+    sev_daily = np.array([severities[int(y)] for y in dates.year])
+    mean_sev = float(np.mean(list(severities.values())[: yr_hi - yr_lo + 1]))
+    flu_index = np.clip(sev_daily * 8.0 * flu_curve + rng.normal(0.0, 0.4, len(dates)), 0, None)
+    flu_normal = mean_sev * 8.0 * flu_curve
+    flu_anomaly = flu_index - flu_normal  # worse-than-usual season is positive
+
     # Base census scales with population and skews up with the elderly share.
     base = 0.0011 * pop_daily * (1.0 + 1.5 * (pct65_daily - 0.16))
 
-    # Winter-peaking seasonal swing (peak near January, trough mid-summer).
+    # Winter-peaking seasonal swing (the *average* weather/flu effect lives here).
     seasonal = 18.0 * np.cos(2.0 * np.pi * (doy - 15) / _DAYS_PER_YEAR)
 
     # Weekend census runs lower (fewer elective admissions, weekend discharges).
@@ -73,8 +89,12 @@ def generate(
     # Gentle non-demographic upward drift.
     drift = 4.0 * t_years
 
+    # Year/day-specific deviations the model can only learn from weather/flu data.
+    cold_extra = -0.35 * temp_anomaly  # colder than normal -> more census
+    flu_extra = 2.2 * flu_anomaly  # worse flu season -> more census
+
     noise = rng.normal(0.0, 5.0, size=len(dates))
-    census = base + seasonal + weekend + drift + noise
+    census = base + seasonal + weekend + drift + cold_extra + flu_extra + noise
 
     # Holiday dips on a handful of fixed-date holidays.
     holiday_md = {(1, 1), (7, 4), (11, 11), (12, 25)}
@@ -99,8 +119,18 @@ def generate(
         holiday_rows.append({C.HOLIDAY_DATE: d.date().isoformat(), C.HOLIDAY_NAME: "holiday"})
     holidays_df = pd.DataFrame(holiday_rows)
 
+    # --- Weather and flu activity files (optional model inputs). --------------
+    weather_df = pd.DataFrame(
+        {C.WEATHER_DATE: dates, C.WEATHER_TEMP: np.round(temp, 1)}
+    )
+    flu_df = pd.DataFrame(
+        {C.FLU_DATE: dates, C.FLU_INDEX: np.round(flu_index, 2)}
+    )
+
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
     census_df.to_csv(cfg.census_path, index=False)
     demo.to_csv(cfg.demographics_path, index=False)
     holidays_df.to_csv(cfg.holidays_path, index=False)
+    weather_df.to_csv(cfg.weather_path, index=False)
+    flu_df.to_csv(cfg.flu_path, index=False)
     return census_df, demo

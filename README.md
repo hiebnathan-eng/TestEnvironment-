@@ -20,6 +20,23 @@ The model combines the signals that actually move hospital census:
 - **Long-run trend** — gradual drift not explained by demographics.
 - **Community structure** — local population size, median age, and the share of
   residents over 65, which scale and shift demand year over year.
+- **Weather and flu (optional)** — when you supply daily temperature and/or a
+  flu-activity index, the model learns how census responds to *unusual* weather
+  and flu (see below).
+
+### Weather and flu: how they help (and their limits)
+
+The recurring flu season and the average winter-weather effect are *already*
+captured by the seasonal cycle above. What the weather and flu inputs add is the
+**deviation from normal** — a colder-than-usual cold snap, a worse-than-usual flu
+season. The model learns those sensitivities (e.g. "colder → busier", "bad flu
+year → busier") and applies them.
+
+This sharpens the **near-term** forecast most, because that is where you actually
+have the information (real weather forecasts run ~2 weeks; current flu activity is
+known). Far into the future nobody knows the weather, so the model falls back to
+"typical for that day" and reverts to the seasonal baseline — the honest default.
+On the bundled sample data, adding weather + flu cut held-out error by ~25%.
 
 It fits a **ridge regression** (a regularised linear model): stable with limited
 data, fast to retrain, and interpretable — every coefficient says how much a
@@ -91,8 +108,35 @@ census-forecast add-demographics --year 2026 --population 128000 \
 census-forecast import-census my_hospital_export.csv   # bulk-merge a CSV by date
 ```
 
-`data/holidays.csv` (optional, columns `date,name`) lets the model treat
-holidays specially.
+**Optional extra signals** (each a simple `date,value` CSV; supply what you have):
+
+- `data/weather.csv` — columns `date,temp_avg` (daily average temperature; any
+  consistent unit). To improve the *near-term* forecast, include the next ~2
+  weeks of forecasted temperatures.
+- `data/flu_activity.csv` — columns `date,flu_index` (e.g. CDC ILINet "% ILI" or
+  a 0–10 activity level). Include the latest known activity to inform the
+  short-range forecast.
+- `data/holidays.csv` — columns `date,name`; lets the model treat holidays specially.
+
+```sh
+census-forecast add-weather --date 2026-01-15 --temp-avg 28.4
+census-forecast add-flu     --date 2026-01-15 --flu-index 6.1
+census-forecast import-weather noaa_export.csv      # bulk-merge by date
+census-forecast import-flu     cdc_ilinet.csv
+```
+
+> Flu data is often weekly (e.g. CDC ILINet). Either repeat the weekly value
+> across that week's dates, or ask and a weekly→daily importer can be added.
+
+### Seeing what the model learned
+
+```sh
+census-forecast explain
+```
+
+Reports day-of-week effects, the seasonal peak/trough months, how census
+correlates with temperature and flu, and the model's top drivers — so the
+"patterns" it uses are visible rather than a black box.
 
 ## Measuring accuracy
 
@@ -116,11 +160,12 @@ python3 -m pytest          # run the test suite
 - `src/census_forecaster/`
   - `config.py` — paths, column names, model hyperparameters
   - `data.py` — load / validate / append / import (the continuous-update workflow)
-  - `sample_data.py` — realistic synthetic data generator
-  - `features.py` — calendar, seasonal, and demographic feature engineering
+  - `sample_data.py` — realistic synthetic data generator (census, demographics, weather, flu)
+  - `features.py` — calendar, seasonal, demographic, and weather/flu feature engineering
   - `model.py` — ridge regression with prediction intervals
   - `forecast.py` — daily prediction + monthly/yearly aggregation
   - `evaluate.py` — backtesting / accuracy metrics
+  - `patterns.py` — the `explain` command: surfaces learned patterns
   - `plot.py` — optional charting
   - `cli.py` — command-line interface
 - `data/` — CSV inputs (sample data committed; generated forecasts are ignored)

@@ -44,6 +44,22 @@ HOLIDAY_DATE = "date"
 HOLIDAY_NAME = "name"
 HOLIDAY_COLUMNS = [HOLIDAY_DATE, HOLIDAY_NAME]
 
+# --- Weather schema (optional) ----------------------------------------------
+# One row per day. `temp_avg` is the daily average temperature in whatever unit
+# you use consistently (the model only uses the deviation from the seasonal
+# normal, so units cancel out).
+WEATHER_DATE = "date"
+WEATHER_TEMP = "temp_avg"
+WEATHER_COLUMNS = [WEATHER_DATE, WEATHER_TEMP]
+
+# --- Flu activity schema (optional) -----------------------------------------
+# One row per day. `flu_index` is any measure of local influenza activity, e.g.
+# CDC ILINet "% influenza-like illness" or a 0-10 activity level. Again, only the
+# deviation from the seasonal normal is used.
+FLU_DATE = "date"
+FLU_INDEX = "flu_index"
+FLU_COLUMNS = [FLU_DATE, FLU_INDEX]
+
 
 @dataclass
 class Config:
@@ -75,3 +91,11 @@ class Config:
     @property
     def holidays_path(self) -> Path:
         return self.data_dir / "holidays.csv"
+
+    @property
+    def weather_path(self) -> Path:
+        return self.data_dir / "weather.csv"
+
+    @property
+    def flu_path(self) -> Path:
+        return self.data_dir / "flu_activity.csv"

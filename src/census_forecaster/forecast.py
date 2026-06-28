@@ -17,7 +17,7 @@ import pandas as pd
 from . import config as C
 from . import data as data_mod
 from .config import Config
-from .features import DemographicsModel, build_feature_matrix
+from .features import DemographicsModel, ExogenousData, build_feature_matrix
 from .model import RidgeModel
 
 
@@ -32,6 +32,7 @@ class Bundle:
     interval_z: float
     feature_names: list
     history: pd.DataFrame
+    exog: ExogenousData
 
 
 def train(cfg: Config) -> Bundle:
@@ -45,9 +46,14 @@ def train(cfg: Config) -> Bundle:
     demo = data_mod.load_demographics(cfg)
     holidays = data_mod.load_holidays(cfg)
     demo_model = DemographicsModel.from_frame(demo)
+    exog = ExogenousData.from_frames(
+        data_mod.load_weather(cfg), data_mod.load_flu(cfg)
+    )
 
     dates = pd.DatetimeIndex(census[C.CENSUS_DATE])
-    X, names = build_feature_matrix(dates, demo_model, holidays, cfg.yearly_harmonics)
+    X, names = build_feature_matrix(
+        dates, demo_model, holidays, cfg.yearly_harmonics, exog
+    )
     y = census[C.CENSUS_VALUE].to_numpy(dtype=float)
 
     model = RidgeModel(alpha=cfg.ridge_alpha).fit(X, y)
@@ -59,13 +65,18 @@ def train(cfg: Config) -> Bundle:
         interval_z=cfg.interval_z,
         feature_names=names,
         history=census,
+        exog=exog,
     )
 
 
 def predict_daily(bundle: Bundle, dates: pd.DatetimeIndex) -> pd.DataFrame:
     """Predict census for each date with a symmetric prediction interval."""
     X, _ = build_feature_matrix(
-        dates, bundle.demo_model, bundle.holidays, bundle.yearly_harmonics
+        dates,
+        bundle.demo_model,
+        bundle.holidays,
+        bundle.yearly_harmonics,
+        bundle.exog,
     )
     mean = bundle.model.predict(X)
     half = bundle.interval_z * bundle.model.resid_std_

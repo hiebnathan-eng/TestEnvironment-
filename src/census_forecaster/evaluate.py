@@ -14,7 +14,7 @@ import pandas as pd
 from . import config as C
 from . import data as data_mod
 from .config import Config
-from .features import DemographicsModel, build_feature_matrix
+from .features import DemographicsModel, ExogenousData, build_feature_matrix
 from .model import RidgeModel
 
 
@@ -56,12 +56,16 @@ def backtest(cfg: Config, holdout_days: int = 30) -> dict:
     demo = data_mod.load_demographics(cfg)
     holidays = data_mod.load_holidays(cfg)
     demo_model = DemographicsModel.from_frame(demo)
+    exog = ExogenousData.from_frames(
+        data_mod.load_weather(cfg), data_mod.load_flu(cfg)
+    )
 
     X_tr, _ = build_feature_matrix(
         pd.DatetimeIndex(train_df[C.CENSUS_DATE]),
         demo_model,
         holidays,
         cfg.yearly_harmonics,
+        exog,
     )
     y_tr = train_df[C.CENSUS_VALUE].to_numpy(dtype=float)
     model = RidgeModel(alpha=cfg.ridge_alpha).fit(X_tr, y_tr)
@@ -71,6 +75,7 @@ def backtest(cfg: Config, holdout_days: int = 30) -> dict:
         demo_model,
         holidays,
         cfg.yearly_harmonics,
+        exog,
     )
     pred = model.predict(X_te)
     actual = test_df[C.CENSUS_VALUE].to_numpy(dtype=float)

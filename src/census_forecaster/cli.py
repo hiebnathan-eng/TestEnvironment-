@@ -97,6 +97,72 @@ def cmd_import_census(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_add_weather(args: argparse.Namespace) -> int:
+    cfg = _cfg(args)
+    df = data_mod.append_weather(cfg, args.date, args.temp_avg)
+    print(f"Recorded temp={args.temp_avg} on {args.date}. Weather now has {len(df)} days.")
+    return 0
+
+
+def cmd_add_flu(args: argparse.Namespace) -> int:
+    cfg = _cfg(args)
+    df = data_mod.append_flu(cfg, args.date, args.flu_index)
+    print(f"Recorded flu_index={args.flu_index} on {args.date}. Flu data now has {len(df)} days.")
+    return 0
+
+
+def cmd_import_weather(args: argparse.Namespace) -> int:
+    cfg = _cfg(args)
+    df = data_mod.import_weather_csv(cfg, args.path)
+    print(f"Imported {args.path}. Weather now has {len(df)} days.")
+    return 0
+
+
+def cmd_import_flu(args: argparse.Namespace) -> int:
+    cfg = _cfg(args)
+    df = data_mod.import_flu_csv(cfg, args.path)
+    print(f"Imported {args.path}. Flu data now has {len(df)} days.")
+    return 0
+
+
+def cmd_explain(args: argparse.Namespace) -> int:
+    from .patterns import analyze
+
+    cfg = _cfg(args)
+    result = analyze(cfg)
+    print("Patterns the model has learned")
+    print("------------------------------")
+    print(f"Overall mean census: {result['overall_mean_census']}")
+
+    dow = result.get("day_of_week_effect", {})
+    if dow:
+        print("\nDay-of-week effect (vs. average):")
+        for day, val in dow.items():
+            print(f"  {day}: {val:+.1f}")
+
+    if "seasonal_peak_month" in result:
+        print(
+            f"\nSeasonal peak month: {result['seasonal_peak_month']} "
+            f"| trough month: {result['seasonal_trough_month']}"
+        )
+
+    if "census_vs_temperature_corr" in result:
+        print(f"\nCensus vs. temperature correlation: {result['census_vs_temperature_corr']:+.3f}")
+    if "census_vs_flu_corr" in result:
+        print(f"Census vs. flu correlation:          {result['census_vs_flu_corr']:+.3f}")
+    if "weather_sensitivity" in result:
+        # Feature is (temperature - seasonal normal); a negative weight => colder days busier.
+        sign = "colder->busier" if result["weather_sensitivity"] < 0 else "warmer->busier"
+        print(f"Weather sensitivity (model): {result['weather_sensitivity']:+.2f}  ({sign})")
+    if "flu_sensitivity" in result:
+        print(f"Flu sensitivity (model):     {result['flu_sensitivity']:+.2f}  (higher flu -> busier)")
+
+    print("\nTop drivers (standardised model weights):")
+    for name, val in result["top_drivers"]:
+        print(f"  {name:>16}: {val:+.2f}")
+    return 0
+
+
 def cmd_forecast(args: argparse.Namespace) -> int:
     cfg = _cfg(args)
     daily, bundle = forecast(cfg, horizon_days=args.horizon_days, start=args.start)
@@ -178,6 +244,27 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("import-census", help="Bulk-import a census CSV (merges by date)")
     sp.add_argument("path", help="CSV with at least date,census columns")
     sp.set_defaults(func=cmd_import_census)
+
+    sp = sub.add_parser("add-weather", help="Append/overwrite one day's avg temperature")
+    sp.add_argument("--date", required=True, help="YYYY-MM-DD")
+    sp.add_argument("--temp-avg", type=float, required=True)
+    sp.set_defaults(func=cmd_add_weather)
+
+    sp = sub.add_parser("add-flu", help="Append/overwrite one day's flu activity index")
+    sp.add_argument("--date", required=True, help="YYYY-MM-DD")
+    sp.add_argument("--flu-index", type=float, required=True)
+    sp.set_defaults(func=cmd_add_flu)
+
+    sp = sub.add_parser("import-weather", help="Bulk-import weather CSV (date,temp_avg)")
+    sp.add_argument("path")
+    sp.set_defaults(func=cmd_import_weather)
+
+    sp = sub.add_parser("import-flu", help="Bulk-import flu CSV (date,flu_index)")
+    sp.add_argument("path")
+    sp.set_defaults(func=cmd_import_flu)
+
+    sp = sub.add_parser("explain", help="Report the patterns the model has learned")
+    sp.set_defaults(func=cmd_explain)
 
     sp = sub.add_parser("forecast", help="Predict future census")
     sp.add_argument("--horizon-days", type=int, default=90, help="Days ahead to forecast")

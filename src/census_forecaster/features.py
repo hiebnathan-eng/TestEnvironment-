@@ -28,6 +28,89 @@ _EPOCH = pd.Timestamp("2015-01-01")
 _DAYS_PER_YEAR = 365.25
 
 
+class ExogenousSeries:
+    """An external daily signal (e.g. temperature, flu activity) as an *anomaly*.
+
+    The recurring seasonal shape of weather and flu is already captured by the
+    model's yearly seasonality, so feeding the raw value would be redundant. What
+    carries new information is the **deviation from the seasonal normal** — a
+    colder-than-usual day, a worse-than-usual flu week.
+
+    We learn a day-of-year "climatology" (the typical value for each calendar
+    day) from the supplied history, then expose ``anomaly(dates) = value - normal``.
+    For any date with no supplied value (notably *future* dates with no forecast),
+    the anomaly is 0 — i.e. the model assumes a typical day, which is the honest
+    fallback when the future signal is unknown.
+    """
+
+    def __init__(self, by_date: dict, climatology: np.ndarray, global_mean: float):
+        self._by_date = by_date
+        self._clim = climatology  # indexed by day-of-year (1..366)
+        self._global_mean = global_mean
+
+    @classmethod
+    def from_frame(cls, df: pd.DataFrame, value_col: str) -> "ExogenousSeries | None":
+        if df is None or len(df) == 0:
+            return None
+        dates = pd.DatetimeIndex(df[C.WEATHER_DATE])
+        vals = df[value_col].to_numpy(dtype=float)
+        by_date = {d.normalize(): v for d, v in zip(dates, vals)}
+        doy = dates.dayofyear.to_numpy()
+        global_mean = float(vals.mean())
+        clim = np.full(367, global_mean)  # 1..366; index 0 unused
+        for d in range(1, 367):
+            mask = doy == d
+            if mask.any():
+                clim[d] = float(vals[mask].mean())
+        return cls(by_date, clim, global_mean)
+
+    def anomaly(self, dates: pd.DatetimeIndex) -> np.ndarray:
+        doy = dates.dayofyear.to_numpy()
+        out = np.empty(len(dates))
+        for i, d in enumerate(dates):
+            normal = self._clim[doy[i]]
+            value = self._by_date.get(d.normalize(), normal)
+            out[i] = value - normal
+        return out
+
+
+class ExogenousData:
+    """Bundle of named external signals appended as features when available.
+
+    Order is fixed (``temp`` then ``flu``) so feature columns line up between
+    training and prediction. Missing signals are simply omitted.
+    """
+
+    _ORDER = ("temp", "flu")
+
+    def __init__(self, series: dict[str, ExogenousSeries]):
+        self.series = series
+
+    @classmethod
+    def from_frames(
+        cls, weather: pd.DataFrame | None, flu: pd.DataFrame | None
+    ) -> "ExogenousData":
+        series: dict[str, ExogenousSeries] = {}
+        temp = ExogenousSeries.from_frame(weather, C.WEATHER_TEMP) if weather is not None else None
+        if temp is not None:
+            series["temp"] = temp
+        flu_s = ExogenousSeries.from_frame(flu, C.FLU_INDEX) if flu is not None else None
+        if flu_s is not None:
+            series["flu"] = flu_s
+        return cls(series)
+
+    def feature_columns(
+        self, dates: pd.DatetimeIndex
+    ) -> tuple[list[np.ndarray], list[str]]:
+        cols: list[np.ndarray] = []
+        names: list[str] = []
+        for key in self._ORDER:
+            if key in self.series:
+                cols.append(self.series[key].anomaly(dates))
+                names.append(f"{key}_anomaly")
+        return cols, names
+
+
 @dataclass
 class DemographicsModel:
     """Per-year demographics with linear extrapolation for future years.
@@ -98,11 +181,13 @@ def build_feature_matrix(
     demo_model: DemographicsModel,
     holidays: set[pd.Timestamp],
     yearly_harmonics: int,
+    exog: "ExogenousData | None" = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Build the (n_dates, n_features) design matrix and the feature names.
 
     The intercept is NOT included here — the model adds and handles it
-    separately so it is not standardised or penalised.
+    separately so it is not standardised or penalised. Optional external signals
+    (weather, flu) are appended via ``exog`` when provided.
     """
     dates = pd.DatetimeIndex(dates)
     n = len(dates)
@@ -147,6 +232,12 @@ def build_feature_matrix(
         names.append("median_age")
         cols.append(daily[C.DEMO_PCT_OVER_65])
         names.append("pct_over_65")
+
+    # External signals (weather, flu) as deviations from the seasonal normal.
+    if exog is not None:
+        exog_cols, exog_names = exog.feature_columns(dates)
+        cols.extend(exog_cols)
+        names.extend(exog_names)
 
     X = np.column_stack(cols)
     return X, names

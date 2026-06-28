@@ -5,11 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project overview
 
 `census-forecaster` is a hospital **census prediction** system. It learns from
-historical daily census logs and local demographic data, then forecasts future
-census (occupied beds) at **daily, monthly, and yearly** granularity, each with
-an uncertainty interval. It is designed for *continuous improvement*: users
-append new observations over time and re-run; the model retrains on all data on
-hand.
+historical daily census logs, local demographics, and optional weather/flu
+signals, then forecasts future census (occupied beds) at **daily, monthly, and
+yearly** granularity, each with an uncertainty interval. It is designed for
+*continuous improvement*: users append new observations over time and re-run; the
+model retrains on all data on hand.
 
 - **Language:** Python (3.10+).
 - **Dependencies:** `numpy`, `pandas`, `matplotlib`. Tests use `pytest`.
@@ -48,9 +48,12 @@ data flow is: **CSV data → features → model → daily forecast → aggregati
   structure the model is meant to recover (demographic base level, winter-peaking
   season, weekend dips, trend, holiday dips, noise).
 - `features.py` — builds the numeric design matrix: linear trend, day-of-week
-  one-hot (Sunday = reference), yearly Fourier seasonal terms, holiday flag, and
-  demographic covariates. `DemographicsModel` interpolates yearly demographics to
-  daily values and **extrapolates** future years.
+  one-hot (Sunday = reference), yearly Fourier seasonal terms, holiday flag,
+  demographic covariates, and optional weather/flu signals. `DemographicsModel`
+  interpolates yearly demographics to daily values and **extrapolates** future
+  years. `ExogenousSeries`/`ExogenousData` turn weather/flu into **anomaly**
+  features (value minus the learned day-of-year climatology); unknown/future
+  dates get anomaly 0, so the forecast cleanly reverts to the seasonal baseline.
 - `model.py` — `RidgeModel`: ridge regression with an **unpenalised intercept**
   and internal feature standardisation; exposes `fit`/`predict` and a residual
   std used for prediction intervals.
@@ -60,6 +63,9 @@ data flow is: **CSV data → features → model → daily forecast → aggregati
   the three granularities consistent.
 - `evaluate.py` — `backtest()` holds out the most recent N days, trains on the
   rest, and reports MAE/RMSE/MAPE/bias.
+- `patterns.py` — `analyze()` powers the `explain` command: observed day-of-week
+  and month effects, census↔weather/flu correlations, and the model's top
+  standardised coefficients.
 - `plot.py` — optional matplotlib chart (uses the headless `Agg` backend).
 - `cli.py` — argparse CLI; `main()` translates `ValueError`/`FileNotFoundError`
   into clean messages instead of tracebacks.
@@ -74,6 +80,12 @@ data flow is: **CSV data → features → model → daily forecast → aggregati
 - **Aggregate intervals** approximate the effective sample size as the number of
   weeks (not days) to stay honest about census autocorrelation
   (`forecast._interval_for_mean`).
+- **Weather/flu enter as anomalies, not raw values.** The average seasonal effect
+  is already in the Fourier terms; the *deviation from normal* is the only new
+  information, so raw values would be redundant/collinear. Future dates with no
+  supplied signal get anomaly 0 (reverts to baseline) — this is why these signals
+  help the near term, not the multi-year horizon. Sign convention: `temp_anomaly`
+  is (temperature − normal), so a **negative** weight means colder → busier.
 
 ## Conventions
 

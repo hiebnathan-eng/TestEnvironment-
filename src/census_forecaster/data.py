@@ -82,6 +82,97 @@ def load_holidays(cfg: Config) -> set[pd.Timestamp]:
     return {ts.normalize() for ts in df[C.HOLIDAY_DATE]}
 
 
+def _load_daily_series(path: Path, value_col: str) -> pd.DataFrame:
+    """Load a generic two-column (date, value) daily series, sorted/de-duped.
+
+    Shared by the optional weather and flu inputs. Returns an empty, typed frame
+    when the file is absent so callers can treat "no data" uniformly.
+    """
+    cols = [C.WEATHER_DATE, value_col]  # WEATHER_DATE == FLU_DATE == "date"
+    if not path.exists():
+        return pd.DataFrame(columns=cols)
+    df = pd.read_csv(path, parse_dates=[C.WEATHER_DATE])
+    if value_col not in df.columns:
+        raise ValueError(f"{path} must have a '{value_col}' column")
+    df = df[cols]
+    df = (
+        df.dropna()
+        .drop_duplicates(subset=[C.WEATHER_DATE], keep="last")
+        .sort_values(C.WEATHER_DATE)
+        .reset_index(drop=True)
+    )
+    df[value_col] = df[value_col].astype(float)
+    return df
+
+
+def _append_daily_series(
+    path: Path, value_col: str, date: str | pd.Timestamp, value: float
+) -> pd.DataFrame:
+    """Append/overwrite one (date, value) row for a generic daily series."""
+    df = _load_daily_series(path, value_col)
+    row = {C.WEATHER_DATE: pd.Timestamp(date).normalize(), value_col: float(value)}
+    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    df = (
+        df.drop_duplicates(subset=[C.WEATHER_DATE], keep="last")
+        .sort_values(C.WEATHER_DATE)
+        .reset_index(drop=True)
+    )
+    _ensure_dir(path)
+    df.to_csv(path, index=False)
+    return df
+
+
+def _import_daily_series(path: Path, value_col: str, src: str | Path) -> pd.DataFrame:
+    """Bulk-merge an external (date, value) CSV into a daily series file."""
+    incoming = pd.read_csv(src, parse_dates=[C.WEATHER_DATE])
+    if value_col not in incoming.columns:
+        raise ValueError(f"{src} must have '{C.WEATHER_DATE}' and '{value_col}' columns")
+    existing = _load_daily_series(path, value_col)
+    merged = pd.concat(
+        [existing, incoming[[C.WEATHER_DATE, value_col]]], ignore_index=True
+    )
+    merged[C.WEATHER_DATE] = pd.to_datetime(merged[C.WEATHER_DATE]).dt.normalize()
+    merged = (
+        merged.dropna()
+        .drop_duplicates(subset=[C.WEATHER_DATE], keep="last")
+        .sort_values(C.WEATHER_DATE)
+        .reset_index(drop=True)
+    )
+    _ensure_dir(path)
+    merged.to_csv(path, index=False)
+    return merged
+
+
+def load_weather(cfg: Config) -> pd.DataFrame:
+    """Load optional daily weather (date, temp_avg)."""
+    return _load_daily_series(cfg.weather_path, C.WEATHER_TEMP)
+
+
+def load_flu(cfg: Config) -> pd.DataFrame:
+    """Load optional daily flu activity (date, flu_index)."""
+    return _load_daily_series(cfg.flu_path, C.FLU_INDEX)
+
+
+def append_weather(cfg: Config, date: str | pd.Timestamp, temp_avg: float) -> pd.DataFrame:
+    """Append/overwrite one day's average temperature."""
+    return _append_daily_series(cfg.weather_path, C.WEATHER_TEMP, date, temp_avg)
+
+
+def append_flu(cfg: Config, date: str | pd.Timestamp, flu_index: float) -> pd.DataFrame:
+    """Append/overwrite one day's flu activity index."""
+    return _append_daily_series(cfg.flu_path, C.FLU_INDEX, date, flu_index)
+
+
+def import_weather_csv(cfg: Config, path: str | Path) -> pd.DataFrame:
+    """Bulk-import weather from an external CSV (date, temp_avg)."""
+    return _import_daily_series(cfg.weather_path, C.WEATHER_TEMP, path)
+
+
+def import_flu_csv(cfg: Config, path: str | Path) -> pd.DataFrame:
+    """Bulk-import flu activity from an external CSV (date, flu_index)."""
+    return _import_daily_series(cfg.flu_path, C.FLU_INDEX, path)
+
+
 def append_census(
     cfg: Config,
     date: str | pd.Timestamp,
@@ -174,6 +265,8 @@ def data_summary(cfg: Config) -> dict:
     summary: dict = {
         "census_rows": int(len(census)),
         "demographics_rows": int(len(demo)),
+        "weather_rows": int(len(load_weather(cfg))),
+        "flu_rows": int(len(load_flu(cfg))),
     }
     if len(census):
         summary["census_start"] = census[C.CENSUS_DATE].min().date().isoformat()
